@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CMBS — Colour Manifested Byte Storage</title>
+<style>
+  :root {
+    --bg: #f5f3ef;
+    --panel: #ffffff;
+    --ink: #222;
+    --muted: #666;
+    --accent: #1d4ed8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.6;
+  }
+  header {
+    background: var(--ink);
+    color: #fff;
+    padding: 40px 20px;
+    text-align: center;
+  }
+  header img { width: 96px; height: 96px; border-radius: 14px; }
+  header h1 { margin: 14px 0 4px; font-size: 2rem; }
+  header p { margin: 0; color: #bbb; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 20px 48px; }
+  section {
+    background: var(--panel);
+    border-radius: 12px;
+    padding: 22px 26px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  }
+  h2 { margin-top: 0; }
+  ul { margin: 0; padding-left: 20px; }
+  li { margin: 6px 0; }
+  .muted { color: var(--muted); }
+  img.sample {
+    width: 100%;
+    max-width: 320px;
+    border-radius: 8px;
+    display: block;
+    margin: 12px auto 0;
+    image-rendering: pixelated;
+  }
+  .download {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    text-decoration: none;
+    font-weight: 600;
+    padding: 12px 26px;
+    border-radius: 8px;
+  }
+  .download:hover { background: #1a40b5; }
+  code { background: #eee; padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <header>
+    <img src="logo.png" alt="CMBS logo">
+    <h1>CMBS</h1>
+    <p>Colour Manifested Byte Storage</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>What is it?</h2>
+      <p>
+        CMBS is a colour QR-style code. Where a normal QR code stores bits in
+        black and white squares, CMBS stores <strong>3 bits per cell</strong>
+        using an 8-colour palette — three times the data density in the same
+        space.
+      </p>
+      <ul>
+        <li>32&times;32 grid, 8 colours, up to 272 bytes per code</li>
+        <li>Reed&ndash;Solomon error correction (L / M / Q levels)</li>
+        <li>Rotation-invariant — works upside down and sideways</li>
+        <li>Camera scanning handles perspective and keystone angles</li>
+        <li>Open-source Python: encode, decode, and a Tkinter GUI</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Example</h2>
+      <img class="sample" src="sample.png" alt="A rendered CMBS code">
+      <p class="muted" style="text-align:center">A CMBS code holding a small payload.</p>
+    </section>
+
+    <section>
+      <h2>Download</h2>
+      <p>
+        Requires <strong>Python 3.10+</strong> and a webcam (optional) for
+        camera scanning. Install dependencies with
+        <code>pip install -r requirements.txt</code>.
+      </p>
+      <a class="download" href="cmbs-v0.1.0.zip" download>Download CMBS v0.1.0 (.zip)</a>
+      <p class="muted" style="margin-top:14px">
+        Unzip and run <code>python gui.py</code> for the app, or
+        <code>python cli.py --help</code> for the command line.
+      </p>
+    </section>
+  </main>
+</body>
+</html>
