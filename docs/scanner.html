@@ -84,10 +84,7 @@
   var octx = overlay.getContext('2d');
   var stream = null;
   var scanning = false;
-  var worker = null;
-  var workerBusy = false;
   var lastDecode = 0;
-  var frameId = 0;
   var MIN_INTERVAL = 80;
   var MAX_DIM = 640;
 
@@ -133,24 +130,8 @@
   }
 
   function startWorker() {
-    if (worker) return;
-    try {
-      worker = new Worker('scanner-worker.js');
-    } catch (e) {
-      worker = null;
-      return;
-    }
-    worker.onmessage = function (e) {
-      workerBusy = false;
-      var msg = e.data;
-      if (!msg || msg.type !== 'result') return;
-      onDecodeResult(msg.result, msg.ms);
-    };
-    worker.onerror = function () {
-      workerBusy = false;
-      worker = null;
-      setStatus('Worker failed; decoding on main thread.');
-    };
+    // Camera frames are decoded on the main thread (same path as upload) to
+    // guarantee identical behaviour; this stays for reference only.
   }
 
   function coverSize(vw, vh, cw, ch) {
@@ -161,18 +142,15 @@
 
   function frameTick() {
     if (!scanning || !stream) return;
-    var now = Date.now();
-    if (!workerBusy && now - lastDecode >= MIN_INTERVAL && video.readyState >= 2) {
-      lastDecode = now;
-      workerBusy = true;
-      var size = coverSize(video.videoWidth, video.videoHeight, capture.width, capture.height);
-      cctx.drawImage(video, size.sx, size.sy, size.sw, size.sh, 0, 0, capture.width, capture.height);
-      var img = cctx.getImageData(0, 0, capture.width, capture.height);
-      if (worker) {
-        var buf = img.data.buffer;
-        worker.postMessage({ type: 'decode', id: ++frameId, width: capture.width, height: capture.height, buf: buf }, [buf]);
-      } else {
-        try {
+    try {
+      var now = Date.now();
+      if (now - lastDecode >= MIN_INTERVAL && video.readyState >= 2) {
+        lastDecode = now;
+        if (!video.videoWidth || !video.videoHeight) { lastDecode = 0; }
+        else {
+          var size = coverSize(video.videoWidth, video.videoHeight, capture.width, capture.height);
+          cctx.drawImage(video, size.sx, size.sy, size.sw, size.sh, 0, 0, capture.width, capture.height);
+          var img = cctx.getImageData(0, 0, capture.width, capture.height);
           var rgb = new Uint8Array(capture.width * capture.height * 3);
           var src = img.data;
           for (var i = 0, o = 0; i < src.length; i += 4, o += 3) {
@@ -180,8 +158,10 @@
           }
           var r = CMBS.decodeFrame(rgb, capture.width, capture.height);
           onDecodeResult(r, null);
-        } catch (err) { workerBusy = false; }
+        }
       }
+    } catch (err) {
+      // never let one bad frame kill the scanning loop
     }
     requestAnimationFrame(frameTick);
   }
@@ -228,36 +208,44 @@
     requestAnimationFrame(frameTick);
   }
 
+  function onStream(s) {
+    stream = s;
+    video.srcObject = s;
+    video.onloadedmetadata = function () {
+      var vw = video.videoWidth, vh = video.videoHeight;
+      if (!vw || !vh) { vw = 640; vh = 480; }
+      var k = Math.min(1, MAX_DIM / Math.max(vw, vh));
+      capture.width = Math.max(2, Math.round(vw * k));
+      capture.height = Math.max(2, Math.round(vh * k));
+      overlay.width = capture.width;
+      overlay.height = capture.height;
+      var stage = document.getElementById('stage');
+      stage.style.aspectRatio = capture.width + ' / ' + capture.height;
+      captureBtn.disabled = false;
+      beginScanning();
+    };
+  }
+
   function startCamera() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       showError('Camera not supported in this browser. Use "Upload image" instead.');
       return;
     }
+    var ok = false;
     navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
       audio: false
     }).then(function (s) {
-      stream = s;
-      video.srcObject = s;
-      video.onloadedmetadata = function () {
-        var vw = video.videoWidth, vh = video.videoHeight;
-        var capW = vw, capH = vh;
-        var k = Math.min(1, MAX_DIM / Math.max(vw, vh));
-        capW = Math.max(2, Math.round(vw * k));
-        capH = Math.max(2, Math.round(vh * k));
-        capture.width = capW;
-        capture.height = capH;
-        overlay.width = capW;
-        overlay.height = capH;
-        var stage = document.getElementById('stage');
-        stage.style.aspectRatio = capW + ' / ' + capH;
-        startWorker();
-        captureBtn.disabled = false;
-        beginScanning();
-      };
+      ok = true;
+      onStream(s);
     }).catch(function (err) {
-      showError('Camera error: ' + (err && err.message ? err.message : err) + ' \u2014 try "Upload image".');
-      startBtn.disabled = false;
+      if (ok) return;
+      navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        .then(onStream)
+        .catch(function (err2) {
+          showError('Camera error: ' + (err2 && err2.message ? err2.message : err2) + ' \u2014 try "Upload image".');
+          startBtn.disabled = false;
+        });
     });
   }
 
