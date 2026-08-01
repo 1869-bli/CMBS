@@ -770,6 +770,10 @@ var CMBS = (function () {
   }
 
   function sampleGrid(warped) {
+    return sampleGridAt(warped, 0, 0);
+  }
+
+  function sampleGridAt(warped, dx, dy) {
     var size = GRID_SIZE, dim = 256;
     var grid = [];
     for (var r = 0; r < size; r++) {
@@ -777,21 +781,85 @@ var CMBS = (function () {
       for (var c = 0; c < size; c++) {
         var x0 = (c * dim / size) | 0, x1 = ((c + 1) * dim / size) | 0;
         var y0 = (r * dim / size) | 0, y1 = ((r + 1) * dim / size) | 0;
-        var ix0 = x0 + ((x1 - x0) / 5 | 0), ix1 = x1 - ((x1 - x0) / 5 | 0);
-        var iy0 = y0 + ((y1 - y0) / 5 | 0), iy1 = y1 - ((y1 - y0) / 5 | 0);
+        var ix0 = x0 + ((x1 - x0) / 5 | 0) + dx, ix1 = x1 - ((x1 - x0) / 5 | 0) + dx;
+        var iy0 = y0 + ((y1 - y0) / 5 | 0) + dy, iy1 = y1 - ((y1 - y0) / 5 | 0) + dy;
         if (ix1 <= ix0) ix1 = ix0 + 1;
         if (iy1 <= iy0) iy1 = iy0 + 1;
         var r2 = 0, g2 = 0, b2 = 0, n2 = 0;
-        for (var yy = iy0; yy < iy1; yy++)
-          for (var xx = ix0; xx < ix1; xx++) {
+        for (var yy = Math.max(0, iy0); yy < Math.min(dim, iy1); yy++)
+          for (var xx = Math.max(0, ix0); xx < Math.min(dim, ix1); xx++) {
             var o = (yy * dim + xx) * 3;
             r2 += warped[o]; g2 += warped[o + 1]; b2 += warped[o + 2]; n2++;
           }
-        row.push(nearestIndex(Math.round(r2 / n2), Math.round(g2 / n2), Math.round(b2 / n2)));
+        row.push(n2 ? nearestIndex(Math.round(r2 / n2), Math.round(g2 / n2), Math.round(b2 / n2)) : 7);
       }
       grid.push(row);
     }
     return grid;
+  }
+
+  // Counts mismatched cells across the four finder regions for a grid sampled
+  // with the given sub-cell shift.  The finder patterns are known exactly, so
+  // this scores grid alignment cheaply without touching the data cells.  The
+  // warp grid may carry any of the four rotations, so the minimum mismatch
+  // over all rotations is used.
+  function finderMismatch(warped, dx, dy) {
+    var size = GRID_SIZE, dim = 256;
+    var label = [[0, 0], [26, 0], [26, 26], [0, 26]];
+    var cells = [];
+    for (var fi = 0; fi < 4; fi++) {
+      var fr = label[fi][0], fc = label[fi][1];
+      for (var r = 0; r < 6; r++)
+        for (var c = 0; c < 6; c++) {
+          var x0 = ((fc + c) * dim / size) | 0, x1 = ((fc + c + 1) * dim / size) | 0;
+          var y0 = ((fr + r) * dim / size) | 0, y1 = ((fr + r + 1) * dim / size) | 0;
+          var ix0 = x0 + ((x1 - x0) / 5 | 0) + dx, ix1 = x1 - ((x1 - x0) / 5 | 0) + dx;
+          var iy0 = y0 + ((y1 - y0) / 5 | 0) + dy, iy1 = y1 - ((y1 - y0) / 5 | 0) + dy;
+          if (ix1 <= ix0) ix1 = ix0 + 1;
+          if (iy1 <= iy0) iy1 = iy0 + 1;
+          var r2 = 0, g2 = 0, b2 = 0, n2 = 0;
+          for (var yy = Math.max(0, iy0); yy < Math.min(dim, iy1); yy++)
+            for (var xx = Math.max(0, ix0); xx < Math.min(dim, ix1); xx++) {
+              var o = (yy * dim + xx) * 3;
+              r2 += warped[o]; g2 += warped[o + 1]; b2 += warped[o + 2]; n2++;
+            }
+          cells.push(n2 ? nearestIndex(Math.round(r2 / n2), Math.round(g2 / n2), Math.round(b2 / n2)) : 7);
+        }
+    }
+    var best = Infinity;
+    for (var rot = 0; rot < 4; rot++) {
+      var wrong = 0;
+      for (var fi2 = 0; fi2 < 4; fi2++)
+        for (var r2 = 0; r2 < 6; r2++)
+          for (var c2 = 0; c2 < 6; c2++) {
+            var idx = fi2 * 36 + r2 * 6 + c2;
+            if (cells[idx] !== finderPatternAt(rot, r2, c2)) wrong++;
+          }
+      if (wrong < best) best = wrong;
+    }
+    return best;
+  }
+
+  // The finder-based homography can be off by a fraction of a cell on small
+  // codes; a tiny uniform shift of the sampling grid then smears cell colours.
+  // Search a small shift range for the alignment that best matches the known
+  // finder patterns, then re-sample the full grid there.
+  function alignGrid(warped) {
+    var best = finderMismatch(warped, 0, 0);
+    var bx = 0, by = 0;
+    for (var dy = -4; dy <= 4; dy++)
+      for (var dx = -4; dx <= 4; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        var m = finderMismatch(warped, dx, dy);
+        if (m < best) { best = m; bx = dx; by = dy; }
+      }
+    for (var fx = -1; fx <= 1; fx += 0.5)
+      for (var fy = -1; fy <= 1; fy += 0.5) {
+        if (fx === 0 && fy === 0) continue;
+        var m2 = finderMismatch(warped, bx + fx, by + fy);
+        if (m2 < best) { best = m2; bx += fx; by += fy; }
+      }
+    return { grid: sampleGridAt(warped, bx, by), dx: bx, dy: by };
   }
 
   // --------------------------------------------------------- public decode
@@ -816,7 +884,12 @@ var CMBS = (function () {
       if (src) warped = warpBBox(img, w, h, src);
     }
     if (!warped) return null;
-    var grid = sampleGrid(warped);
+    var grid = null;
+    if (finders) {
+      grid = alignGrid(warped).grid;
+    } else {
+      grid = sampleGrid(warped);
+    }
     var res = decodePayload(grid);
     if (!res) return null;
     var corners = null;
@@ -846,6 +919,9 @@ var CMBS = (function () {
     warpFromFinders: warpFromFinders,
     warpBBox: warpBBox,
     sampleGrid: sampleGrid,
+    sampleGridAt: sampleGridAt,
+    finderMismatch: finderMismatch,
+    alignGrid: alignGrid,
     boxDownscale: boxDownscale,
   };
 })();

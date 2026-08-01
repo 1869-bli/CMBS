@@ -3,35 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<meta name="theme-color" content="#11151c">
+<meta name="theme-color" content="#222222">
 <title>CMBS Scanner</title>
 <style>
-  :root { --bg:#11151c; --fg:#e8ecf2; --dim:#8a93a3; --accent:#3ddc84; --warn:#ffb454; }
   * { box-sizing: border-box; }
-  html, body { margin:0; padding:0; background:var(--bg); color:var(--fg); font:16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { padding:12px 16px; display:flex; align-items:center; gap:10px; border-bottom:1px solid #232a36; }
-  header a { color:var(--dim); text-decoration:none; font-size:14px; }
-  header h1 { font-size:18px; margin:0; flex:1; }
-  #scan { max-width:720px; margin:0 auto; padding:16px; }
-  .stage { position:relative; width:100%; aspect-ratio:4/3; background:#000; border-radius:12px; overflow:hidden; }
-  .stage video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
-  .stage canvas.overlay { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
-  .stage .placeholder { position:absolute; inset:0; display:flex; flex-direction:column; gap:8px; align-items:center; justify-content:center; color:var(--dim); text-align:center; padding:20px; }
-  .stage .placeholder .big { font-size:42px; line-height:1; }
-  .status { text-align:center; min-height:1.5em; margin:10px 0 4px; color:var(--dim); font-size:14px; }
-  .controls { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin:10px 0; }
+  html, body { margin: 0; padding: 0; background: #f5f3ef; color: #222; font: 16px/1.5 "Segoe UI", system-ui, Arial, sans-serif; }
+  header { background: #222; color: #fff; padding: 14px 16px; }
+  header a { color: #bbb; text-decoration: none; font-size: 14px; margin-right: 12px; }
+  header h1 { display: inline; font-size: 18px; margin: 0; }
+  main { max-width: 720px; margin: 0 auto; padding: 16px; }
+  .stage { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border: 1px solid #ddd; overflow: hidden; }
+  .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .stage canvas.overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .stage .placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #999; text-align: center; padding: 20px; }
+  .status { text-align: center; min-height: 1.5em; margin: 12px 0 8px; color: #666; font-size: 14px; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin: 8px 0 4px; }
   button, .btn {
-    appearance:none; border:1px solid #2c3544; background:#1a2029; color:var(--fg);
-    padding:11px 18px; border-radius:10px; font-size:15px; cursor:pointer; text-decoration:none;
+    appearance: none; font: 15px/1.4 inherit; color: #222; background: #fff; border: 1px solid #888;
+    padding: 9px 16px; border-radius: 0; cursor: pointer; text-decoration: none;
   }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#06281a; font-weight:600; }
-  button:disabled { opacity:.45; cursor:default; }
-  #result { display:none; background:#0d1117; border:1px solid #2c3544; border-radius:12px; padding:14px 16px; margin-top:12px; }
-  #result.ok { border-color:var(--accent); }
-  #result .label { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin-bottom:4px; }
-  #result .payload { font-size:18px; word-break:break-word; font-weight:600; }
-  #result .meta { color:var(--dim); font-size:13px; margin-top:6px; }
-  #error { display:none; color:var(--warn); text-align:center; margin:10px 0; }
+  button:hover, .btn:hover { background: #eee; }
+  button.primary { background: #222; color: #fff; border-color: #222; }
+  button.primary:hover { background: #000; }
+  button:disabled { color: #aaa; border-color: #ccc; background: #eee; cursor: default; }
+  #error { display: none; color: #a33; text-align: center; margin: 10px 0; }
+  #result { display: none; margin: 16px 0 4px; }
+  #result .label { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #666; }
+  #result .payload { font-size: 20px; font-weight: 600; margin: 4px 0; word-break: break-word; }
+  #result .meta { color: #666; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -39,13 +38,12 @@
   <a href="index.html">&larr; Home</a>
   <h1>CMBS Scanner</h1>
 </header>
-<main id="scan">
+<main>
   <div class="stage" id="stage">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="overlay" class="overlay"></canvas>
     <div class="placeholder" id="placeholder">
-      <div class="big">&#9632;&#9632;</div>
-      <div>Point your camera at a CMBS code.<br>Or upload a photo of one.</div>
+      <div>Point your camera at a CMBS code,<br>or upload a photo of one.</div>
     </div>
   </div>
   <div class="status" id="status">Scanner idle.</div>
@@ -96,22 +94,19 @@
   function setStatus(msg) { statusEl.textContent = msg; }
   function showError(msg) { errorEl.textContent = msg; errorEl.style.display = msg ? 'block' : 'none'; }
   function showResult(payload, meta) {
-    resultEl.classList.add('ok');
     resultEl.style.display = 'block';
     payloadEl.textContent = payload;
     metaEl.textContent = meta;
   }
   function clearResult() {
     resultEl.style.display = 'none';
-    resultEl.classList.remove('ok');
     octx.clearRect(0, 0, overlay.width, overlay.height);
   }
 
   function payloadText(p) {
     if (!p || !p.length) return '(empty)';
     try {
-      var t = new TextDecoder('utf-8', { fatal: true }).decode(p);
-      return t;
+      return new TextDecoder('utf-8', { fatal: true }).decode(p);
     } catch (e) { /* fall through to hex */ }
     var hex = '';
     for (var i = 0; i < p.length; i++) hex += (p[i] < 16 ? '0' : '') + p[i].toString(16);
@@ -134,10 +129,9 @@
 
   function meta(result, ms) {
     var rot = ['0', '90', '180', '270'][result.rotation] || String(result.rotation);
-    return 'Rotation ' + rot + '° &middot; ' + Math.round(ms) + ' ms';
+    return 'Rotation ' + rot + '\u00b0' + (ms ? ' \u00b7 ' + Math.round(ms) + ' ms' : '');
   }
 
-  // ----- live camera -----
   function startWorker() {
     if (worker) return;
     try {
@@ -194,7 +188,7 @@
 
   function onDecodeResult(result, ms) {
     if (!result) {
-      setStatus('Scanning&hellip; hold steady');
+      setStatus('Scanning\u2026 hold steady');
       drawCorners(null);
       return;
     }
@@ -203,7 +197,7 @@
       drawCorners(null);
       return;
     }
-    setStatus('Code found!');
+    setStatus('Code found.');
     drawCorners(result.corners);
     showResult(payloadText(result.payload), meta(result, ms));
     stopScanning(true);
@@ -230,7 +224,7 @@
     startBtn.disabled = true;
     captureBtn.disabled = true;
     uploadBtn.disabled = true;
-    setStatus('Starting camera&hellip;');
+    setStatus('Starting camera\u2026');
     requestAnimationFrame(frameTick);
   }
 
@@ -262,7 +256,7 @@
         beginScanning();
       };
     }).catch(function (err) {
-      showError('Camera error: ' + (err && err.message ? err.message : err) + ' — try "Upload image".');
+      showError('Camera error: ' + (err && err.message ? err.message : err) + ' \u2014 try "Upload image".');
       startBtn.disabled = false;
     });
   }
@@ -280,7 +274,7 @@
     if (r) {
       showResult(payloadText(r.payload), meta(r, ms));
       drawCorners(r.corners);
-      setStatus('Code found!');
+      setStatus('Code found.');
     } else {
       drawCorners(null);
       setStatus('No CMBS code found in that image.');
@@ -325,7 +319,6 @@
   uploadInput.addEventListener('change', function () { decodeFile(uploadInput.files[0]); uploadInput.value = ''; });
   photoInput.addEventListener('change', function () { decodeFile(photoInput.files[0]); photoInput.value = ''; });
 
-  // Native photo capture on phones is wired to a hidden capture-input button too.
   var nativeBtn = document.createElement('button');
   nativeBtn.className = 'btn';
   nativeBtn.id = 'nativePhotoBtn';
