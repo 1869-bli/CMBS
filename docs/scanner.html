@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#11151c">
+<title>CMBS Scanner</title>
+<style>
+  :root { --bg:#11151c; --fg:#e8ecf2; --dim:#8a93a3; --accent:#3ddc84; --warn:#ffb454; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background:var(--bg); color:var(--fg); font:16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding:12px 16px; display:flex; align-items:center; gap:10px; border-bottom:1px solid #232a36; }
+  header a { color:var(--dim); text-decoration:none; font-size:14px; }
+  header h1 { font-size:18px; margin:0; flex:1; }
+  #scan { max-width:720px; margin:0 auto; padding:16px; }
+  .stage { position:relative; width:100%; aspect-ratio:4/3; background:#000; border-radius:12px; overflow:hidden; }
+  .stage video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .stage canvas.overlay { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  .stage .placeholder { position:absolute; inset:0; display:flex; flex-direction:column; gap:8px; align-items:center; justify-content:center; color:var(--dim); text-align:center; padding:20px; }
+  .stage .placeholder .big { font-size:42px; line-height:1; }
+  .status { text-align:center; min-height:1.5em; margin:10px 0 4px; color:var(--dim); font-size:14px; }
+  .controls { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin:10px 0; }
+  button, .btn {
+    appearance:none; border:1px solid #2c3544; background:#1a2029; color:var(--fg);
+    padding:11px 18px; border-radius:10px; font-size:15px; cursor:pointer; text-decoration:none;
+  }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#06281a; font-weight:600; }
+  button:disabled { opacity:.45; cursor:default; }
+  #result { display:none; background:#0d1117; border:1px solid #2c3544; border-radius:12px; padding:14px 16px; margin-top:12px; }
+  #result.ok { border-color:var(--accent); }
+  #result .label { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin-bottom:4px; }
+  #result .payload { font-size:18px; word-break:break-word; font-weight:600; }
+  #result .meta { color:var(--dim); font-size:13px; margin-top:6px; }
+  #error { display:none; color:var(--warn); text-align:center; margin:10px 0; }
+</style>
+</head>
+<body>
+<header>
+  <a href="index.html">&larr; Home</a>
+  <h1>CMBS Scanner</h1>
+</header>
+<main id="scan">
+  <div class="stage" id="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="overlay" class="overlay"></canvas>
+    <div class="placeholder" id="placeholder">
+      <div class="big">&#9632;&#9632;</div>
+      <div>Point your camera at a CMBS code.<br>Or upload a photo of one.</div>
+    </div>
+  </div>
+  <div class="status" id="status">Scanner idle.</div>
+  <div class="controls">
+    <button id="startBtn" class="primary">Start camera</button>
+    <button id="captureBtn" disabled>Take photo</button>
+    <button class="btn" id="uploadBtn">Upload image</button>
+    <input type="file" id="uploadInput" accept="image/*" hidden>
+    <input type="file" id="photoInput" accept="image/*" capture="environment" hidden>
+  </div>
+  <div id="error"></div>
+  <div id="result">
+    <div class="label">Decoded payload</div>
+    <div class="payload" id="payloadText"></div>
+    <div class="meta" id="resultMeta"></div>
+  </div>
+</main>
+<script src="cmbs-decoder.js"></script>
+<script>
+(function () {
+  'use strict';
+  var video = document.getElementById('video');
+  var overlay = document.getElementById('overlay');
+  var placeholder = document.getElementById('placeholder');
+  var statusEl = document.getElementById('status');
+  var errorEl = document.getElementById('error');
+  var resultEl = document.getElementById('result');
+  var payloadEl = document.getElementById('payloadText');
+  var metaEl = document.getElementById('resultMeta');
+  var startBtn = document.getElementById('startBtn');
+  var captureBtn = document.getElementById('captureBtn');
+  var uploadBtn = document.getElementById('uploadBtn');
+  var uploadInput = document.getElementById('uploadInput');
+  var photoInput = document.getElementById('photoInput');
+
+  var capture = document.createElement('canvas');
+  var cctx = capture.getContext('2d', { willReadFrequently: true });
+  var octx = overlay.getContext('2d');
+  var stream = null;
+  var scanning = false;
+  var worker = null;
+  var workerBusy = false;
+  var lastDecode = 0;
+  var frameId = 0;
+  var MIN_INTERVAL = 80;
+  var MAX_DIM = 640;
+
+  function setStatus(msg) { statusEl.textContent = msg; }
+  function showError(msg) { errorEl.textContent = msg; errorEl.style.display = msg ? 'block' : 'none'; }
+  function showResult(payload, meta) {
+    resultEl.classList.add('ok');
+    resultEl.style.display = 'block';
+    payloadEl.textContent = payload;
+    metaEl.textContent = meta;
+  }
+  function clearResult() {
+    resultEl.style.display = 'none';
+    resultEl.classList.remove('ok');
+    octx.clearRect(0, 0, overlay.width, overlay.height);
+  }
+
+  function payloadText(p) {
+    if (!p || !p.length) return '(empty)';
+    try {
+      var t = new TextDecoder('utf-8', { fatal: true }).decode(p);
+      return t;
+    } catch (e) { /* fall through to hex */ }
+    var hex = '';
+    for (var i = 0; i < p.length; i++) hex += (p[i] < 16 ? '0' : '') + p[i].toString(16);
+    return '0x' + hex + '  (not valid UTF-8)';
+  }
+
+  function drawCorners(corners) {
+    octx.clearRect(0, 0, overlay.width, overlay.height);
+    if (!corners) return;
+    octx.strokeStyle = '#3ddc84';
+    octx.lineWidth = Math.max(3, overlay.width / 160);
+    octx.beginPath();
+    for (var i = 0; i < 4; i++) {
+      var c = corners[i];
+      if (i === 0) octx.moveTo(c[0], c[1]); else octx.lineTo(c[0], c[1]);
+    }
+    octx.closePath();
+    octx.stroke();
+  }
+
+  function meta(result, ms) {
+    var rot = ['0', '90', '180', '270'][result.rotation] || String(result.rotation);
+    return 'Rotation ' + rot + '° &middot; ' + Math.round(ms) + ' ms';
+  }
+
+  // ----- live camera -----
+  function startWorker() {
+    if (worker) return;
+    try {
+      worker = new Worker('scanner-worker.js');
+    } catch (e) {
+      worker = null;
+      return;
+    }
+    worker.onmessage = function (e) {
+      workerBusy = false;
+      var msg = e.data;
+      if (!msg || msg.type !== 'result') return;
+      onDecodeResult(msg.result, msg.ms);
+    };
+    worker.onerror = function () {
+      workerBusy = false;
+      worker = null;
+      setStatus('Worker failed; decoding on main thread.');
+    };
+  }
+
+  function coverSize(vw, vh, cw, ch) {
+    var s = Math.max(cw / vw, ch / vh);
+    var sw = cw / s, sh = ch / s;
+    return { sx: (vw - sw) / 2, sy: (vh - sh) / 2, sw: sw, sh: sh };
+  }
+
+  function frameTick() {
+    if (!scanning || !stream) return;
+    var now = Date.now();
+    if (!workerBusy && now - lastDecode >= MIN_INTERVAL && video.readyState >= 2) {
+      lastDecode = now;
+      workerBusy = true;
+      var size = coverSize(video.videoWidth, video.videoHeight, capture.width, capture.height);
+      cctx.drawImage(video, size.sx, size.sy, size.sw, size.sh, 0, 0, capture.width, capture.height);
+      var img = cctx.getImageData(0, 0, capture.width, capture.height);
+      if (worker) {
+        var buf = img.data.buffer;
+        worker.postMessage({ type: 'decode', id: ++frameId, width: capture.width, height: capture.height, buf: buf }, [buf]);
+      } else {
+        try {
+          var rgb = new Uint8Array(capture.width * capture.height * 3);
+          var src = img.data;
+          for (var i = 0, o = 0; i < src.length; i += 4, o += 3) {
+            rgb[o] = src[i]; rgb[o + 1] = src[i + 1]; rgb[o + 2] = src[i + 2];
+          }
+          var r = CMBS.decodeFrame(rgb, capture.width, capture.height);
+          onDecodeResult(r, null);
+        } catch (err) { workerBusy = false; }
+      }
+    }
+    requestAnimationFrame(frameTick);
+  }
+
+  function onDecodeResult(result, ms) {
+    if (!result) {
+      setStatus('Scanning&hellip; hold steady');
+      drawCorners(null);
+      return;
+    }
+    if (result.error) {
+      setStatus('Decode error: ' + result.error);
+      drawCorners(null);
+      return;
+    }
+    setStatus('Code found!');
+    drawCorners(result.corners);
+    showResult(payloadText(result.payload), meta(result, ms));
+    stopScanning(true);
+    if (navigator.vibrate) navigator.vibrate(120);
+  }
+
+  function stopScanning(keepVideo) {
+    scanning = false;
+    if (stream && !keepVideo) {
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      stream = null;
+    }
+    startBtn.disabled = false;
+    captureBtn.disabled = true;
+    uploadBtn.disabled = false;
+    startBtn.textContent = 'Restart camera';
+  }
+
+  function beginScanning() {
+    clearResult();
+    showError('');
+    placeholder.style.display = 'none';
+    scanning = true;
+    startBtn.disabled = true;
+    captureBtn.disabled = true;
+    uploadBtn.disabled = true;
+    setStatus('Starting camera&hellip;');
+    requestAnimationFrame(frameTick);
+  }
+
+  function startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showError('Camera not supported in this browser. Use "Upload image" instead.');
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    }).then(function (s) {
+      stream = s;
+      video.srcObject = s;
+      video.onloadedmetadata = function () {
+        var vw = video.videoWidth, vh = video.videoHeight;
+        var capW = vw, capH = vh;
+        var k = Math.min(1, MAX_DIM / Math.max(vw, vh));
+        capW = Math.max(2, Math.round(vw * k));
+        capH = Math.max(2, Math.round(vh * k));
+        capture.width = capW;
+        capture.height = capH;
+        overlay.width = capW;
+        overlay.height = capH;
+        var stage = document.getElementById('stage');
+        stage.style.aspectRatio = capW + ' / ' + capH;
+        startWorker();
+        captureBtn.disabled = false;
+        beginScanning();
+      };
+    }).catch(function (err) {
+      showError('Camera error: ' + (err && err.message ? err.message : err) + ' — try "Upload image".');
+      startBtn.disabled = false;
+    });
+  }
+
+  function decodeStill(imgData) {
+    clearResult();
+    var rgb = new Uint8Array(capture.width * capture.height * 3);
+    var src = imgData.data;
+    for (var i = 0, o = 0; i < src.length; i += 4, o += 3) {
+      rgb[o] = src[i]; rgb[o + 1] = src[i + 1]; rgb[o + 2] = src[i + 2];
+    }
+    var t0 = performance.now();
+    var r = CMBS.decodeFrame(rgb, capture.width, capture.height);
+    var ms = performance.now() - t0;
+    if (r) {
+      showResult(payloadText(r.payload), meta(r, ms));
+      drawCorners(r.corners);
+      setStatus('Code found!');
+    } else {
+      drawCorners(null);
+      setStatus('No CMBS code found in that image.');
+    }
+  }
+
+  function decodeFile(file) {
+    if (!file) return;
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function () {
+      var k = Math.min(1, MAX_DIM / Math.max(img.naturalWidth, img.naturalHeight));
+      capture.width = Math.max(2, Math.round(img.naturalWidth * k));
+      capture.height = Math.max(2, Math.round(img.naturalHeight * k));
+      cctx.drawImage(img, 0, 0, capture.width, capture.height);
+      URL.revokeObjectURL(url);
+      var imgData = cctx.getImageData(0, 0, capture.width, capture.height);
+      overlay.width = capture.width;
+      overlay.height = capture.height;
+      decodeStill(imgData);
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); showError('Could not read that image.'); };
+    img.src = url;
+  }
+
+  function takePhoto() {
+    if (!stream || !video.readyState) return;
+    var size = coverSize(video.videoWidth, video.videoHeight, capture.width, capture.height);
+    cctx.drawImage(video, size.sx, size.sy, size.sw, size.sh, 0, 0, capture.width, capture.height);
+    var imgData = cctx.getImageData(0, 0, capture.width, capture.height);
+    decodeStill(imgData);
+  }
+
+  startBtn.addEventListener('click', function () {
+    if (stream) { stopScanning(false); }
+    clearResult();
+    showError('');
+    startCamera();
+  });
+  captureBtn.addEventListener('click', takePhoto);
+  uploadBtn.addEventListener('click', function () { uploadInput.click(); });
+  uploadInput.addEventListener('change', function () { decodeFile(uploadInput.files[0]); uploadInput.value = ''; });
+  photoInput.addEventListener('change', function () { decodeFile(photoInput.files[0]); photoInput.value = ''; });
+
+  // Native photo capture on phones is wired to a hidden capture-input button too.
+  var nativeBtn = document.createElement('button');
+  nativeBtn.className = 'btn';
+  nativeBtn.id = 'nativePhotoBtn';
+  nativeBtn.textContent = 'Take photo';
+  nativeBtn.addEventListener('click', function () { photoInput.click(); });
+  var controls = document.querySelector('.controls');
+  controls.insertBefore(nativeBtn, controls.querySelector('#captureBtn').nextSibling);
+  nativeBtn.style.display = 'none';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    startBtn.textContent = 'Camera not available';
+    startBtn.disabled = true;
+    nativeBtn.style.display = '';
+    captureBtn.style.display = 'none';
+    setStatus('Use "Take photo" or "Upload image" to scan.');
+  }
+})();
+</script>
+</body>
+</html>
